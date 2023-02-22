@@ -3,7 +3,7 @@
 ## Description
 This project was completed in collaboration with fellow students Hana Ghazi and Denial Tan as part of CSE 5241 Introduction to Database Systems at The Ohio State University SU'21.
 
-The fictional story begins with Stomper & Wombat's hiring us to design and implement a relational database system as part of their major development effort. We are supplied relevant information about the company, its operations and employee points of view.
+The fictional company Stomper & Wombat's hiring us to design and implement a relational database system as part of their major development effort. We are supplied relevant information about the company, its operations and employee points of view.
 
 ## Skills
 - SQL
