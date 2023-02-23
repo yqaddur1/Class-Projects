@@ -1,0 +1,236 @@
+---
+title: "Palmer Penguins"
+author: "Frank Leyva Castro, Yousef Qaddura, Changrui Wang"
+subtitle: 'STAT 6730: Data Analysis Project'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{css, echo=FALSE}
+h1, h2, h3, h4 {
+  text-align: center;
+}
+```
+
+```{r setup, include=FALSE} 
+library(knitr)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo=FALSE) 
+knitr::opts_chunk$set(cache.extra = rand_seed)
+set.seed(105134)
+```
+
+```{r, echo=FALSE}
+library(palmerpenguins)
+library(leaps)
+library(purrr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(rsample)
+data(penguins)
+penguins <- penguins[complete.cases(penguins),]
+```
+
+### Introduction
+The `palmerpenguins` raw data were collected over 2007-2009 and made available by Dr. Kristen Gorman and the Palmer Station, Antarctica LTER, a member of the Long Term Ecological Research Network. The cleaned-up dataset `penguins` contains complete data for size measurements of `r nrow(penguins)` adult foraging penguins of 3 different species (`r unique(penguins$species)`), collected from 3 different Islands (`r unique(penguins$island)`).
+
+The dataframe `penguins` has `nrow(penguins)` complete cases and `ncol(penguins)` features. The following is the list of features present in the data along with a short description:
+
+* Species `species`: the species of the penguin, a categorical variable with unique values `r unique(penguins$species)`.
+* Island `island`: which island the penguin is from, a categorical variable with unique values `r unique(penguins$island)`. 
+* Bill Length & Depth `bill_length_mm, bill_depth_mm`: the length and depth measurements in mm of the penguin's bill, continuous variables. The length ranges from `r min(penguins$bill_length_mm)` to `r max(penguins$bill_length_mm)` with mean `r mean(penguins$bill_length_mm)`  and the depth ranges from `r min(penguins$bill_depth_mm)` to `r max(penguins$bill_depth_mm)` with mean `r mean(penguins$bill_depth_mm)`.
+* Flipper Length `flipper_length_mm`: the length of the penguin's flipper, a continuous variable ranging from `r min(penguins$flipper_length_mm)` to `r max(penguins$flipper_length_mm)`.
+* Sex `sex`: the sex of the penguin, a categorical variable with unique values `r unique(penguins$sex)`.
+* Year `year`: the year in which the penguin's measurements were collected, a categorical variable with unique values `r unique(penguins$yaer)`.
+* Body Mass `body_mass_g`: the penguin's mass measurement in grams, a continuous variable ranging from `r min(penguins$body_mass_g)` to `r max(penguins$body_mass_g)` with mean `r mean(penguins$body_mass_g)`.
+
+Our questions of interest are three-fold:
+
+1) How does body mass depend on the other features? More specifically, what are the best choices of linear regression models that explain body mass? Here best is in the sense of BIC, AIC and similar measures. This question is answered through best subsets regression.
+
+2) Are the chosen models distinguished in terms of predictive power? We use $15$-fold cross-validation to uncover the answer. We will find that all three have similar predictive power and hence choose to proceed with the simplest model as the model of choice.
+
+3) What are the statistical properties of the coefficients for the model of choice? This question is answered using bootstrap.
+
+### Expolatory Data Analysis
+
+Before embarking on our questions, we remark on our observations from Figure 1. Firth, we observe that changing sex from female to male remarkably causes an increase in the body mass axis ticks. Next, body mass is positively correlated with all size measurements. The Gentoo species (blue) is distinguished in having much higher body mass than other species. The other two species differ on their bill length. We also include an extra Figure 2 which shows much more statistical amongst all pairs of variables although we feel that it is enough to have commented on Figure 1 for the purposes of our analysis.
+
+### Best Subsets Regression Result
+
+The results of best subsets regression are shown in Table 1 and Table 2. Aided with the observations in the previous section, we choose the simplest model to be the one with $4$ variables in Table 1 so as to at least incorporate sex, Gentoo species and some size measurements. We choose the complex model with interactions to be the one with $5$ variables in Table 1, although we enforce hierarchy. Note that Table 2 shows that all models with at least three variables have relatively comparable meaasure characteristics. We summarize the model equations:
+
+* Simple (Model A)
+
+\[\scriptstyle \text{BodyMass } = \text{ Male } + \text{ Gentoo } + \text{ Bill Depth } + \text{ Flipper Length}\]
+
+
+* Complex without Interactions (Model B)
+
+\[\scriptstyle
+\begin{aligned}
+\text{BodyMass } = \text{ Male } &+ \text{ Gentoo }+\text{ Chinstrap }\\
+&+\text{ Bill Length } +\text{ Bill Depth } + \text{ Flipper Length}
+\end{aligned}\]
+
+* Complex with Interactions (Model C)
+
+\[\scriptstyle\begin{aligned}\text{BodyMass } = \text{ Male } &+ \text{ Gentoo }+\text{ Chinstrap }\\
+&+\text{ Bill Length } *\text{ Bill Depth }+\text{ Bill Length }*\text{ Flipper Length }
+\end{aligned}\]
+
+### Anova Analysis
+
+```{r}
+formulaA <- body_mass_g~male+gentoo+bill_depth_mm+flipper_length_mm
+
+dfA <- mutate(penguins,male = as.factor(penguins$sex == "male"),
+                             gentoo = as.factor(penguins$species == "Gentoo"))
+
+formulaB <- body_mass_g~sex+species+bill_length_mm+bill_depth_mm+flipper_length_mm
+  
+formulaC <- body_mass_g~sex+species+bill_length_mm*bill_depth_mm+flipper_length_mm*bill_length_mm
+
+modelA <- lm(formulaA, dfA)
+modelB <- lm(formulaB, data=penguins)
+modelC <- lm(formulaC, data=penguins)
+anovaAB <- anova(modelA, modelB)
+anovaBC <- anova(modelB,modelC)
+```
+
+To analyze the models, begin by performing ANOVA $F$-tests. With Model $A$ as null and $B$ as alternative, the $p$-value of the $F$-test is given by `r anovaAB$'Pr(>F)'[[2]]`. With Model $B$ as null and $C$ as alternative, the $p$-value of the $F$-test is given by `r anovaBC$'Pr(>F)'[[2]]`. This shows that Model $C$ best explains the variation in body mass compared to the other two models. This would be the model of choice if such characteristic is desired.
+
+### $15$-fold Cross-Validation
+
+In this analysis, our model of choice will be based on its predictive power and simplicity. By performing $15$-fold cross-validation (see Table 3), we observe that the three models have very similar average mean squared errors and comparable standard errors or mean squares across the folds. From this, we conclude that our model of choice is Model A, the simplest one as it is simplest with similar predictive power to the other two models.
+
+## Bootstrap Confidence Intervals
+
+The bootstrap $\% 95$ confidence intervals for our model of choice coefficients are shown in Table 4. We observe that none of them contain the value zero and all have relatively acceptable widths. This entails that there is no strong evidence of bias toward model A in the data!
+
+## Conclusions
+
+Overall, the *penguins* data-set is an excellent practice for newcomers into data analysis. The models and plots show clear species and sex differences and the remarkable dependence of a penguin's body mass on its bill and flipper characteristics. Model C highlighted the importance of interaction terms in explaining variance, but also gives a warning about the challenges of interpretation. All models considered have similar predictive power and the best model of choice recommended is the simplest!
+
+### Figure Appendix
+
+```{r, out.width="100%"}
+penguins%>%
+  mutate(index = seq(1,length(penguins$sex)))%>%
+  select(-c(year,island))%>%
+  filter(complete.cases(.))%>%
+  gather(key='Predictor',value = 'Predictor Value',-c(index,species,body_mass_g,sex))%>%
+  ggplot(mapping = aes(x=`Predictor Value`,y=body_mass_g,group=species,color=species))+
+  geom_point()+
+  geom_smooth(method = lm)+
+  facet_grid(vars(sex),vars(Predictor),scales="free")+
+  theme_bw()+
+  labs(title = "Figure 1. Body Mass against Size Measurements")
+```
+
+```{r, out.width = "100%"}
+library(GGally)
+ggpairs(select(penguins,-c(year,island)),
+        aes(color=species,alpha=0.5),
+        upper = list(continuous = wrap("cor", size = 4)),title = 'Pairwise Summary',
+        lower=list(continuous='smooth'))+
+  theme_bw() +
+  labs(title = "Figure 2. GGPairs Plot")
+```
+
+```{r}
+best<-regsubsets(body_mass_g~sex+ species+bill_length_mm*bill_depth_mm*flipper_length_mm, data=penguins, nbest = 1) %>% 
+  summary()   
+table <- data.frame(best[["outmat"]])  
+  names(table) <- c("male","Chinstrap","Gentoo","BillL","BillD","FlipperL","BD*BL","FL*BL","FL*BD", "FL*BDBL") 
+  knitr::kable(table, caption = "Table 1. Best Subsets Regression Result")
+```
+
+```{r}
+best.p <- as.numeric(rownames(best$which))+1
+best.AIC <- 81*log(best$rss/81)+2*best.p
+  results <- data.frame(model.no=1:8,Mallow_C =best$cp, BIC =best$bic, R2 =best$rsq, AR2 =best$adjr2, AIC = best.AIC)
+  knitr::kable(results, caption  ="Table 2. Best Subsets Regression Measure Results")
+```
+
+
+```{r}
+CV_outA <- vfold_cv(dfA, v=15) %>% 
+  rowwise() %>% 
+  mutate(fit=list(lm(formulaA, data=splits)), predictions = list(predict(fit,assessment(splits))), mse = mean((assessment(splits)$body_mass_g-predictions)^2, na.rm=T))
+CVA<- CV_outA %>% 
+ungroup() %>% 
+  summarize(se=sd(mse/sqrt(n())),mse=mean(mse))
+  
+
+CV_outB <- vfold_cv(penguins, v=15) %>% 
+  rowwise() %>% 
+  mutate(fit=list(lm(formulaB, data=splits)), predictions = list(predict(fit,assessment(splits))), mse = mean((assessment(splits)$body_mass_g-predictions)^2, na.rm=T)) 
+CVB<- CV_outB%>% 
+  ungroup() %>% 
+  summarize(se=sd(mse/sqrt(n())),mse=mean(mse))
+
+CV_outC <- vfold_cv(penguins, v=15) %>% 
+  rowwise() %>% 
+  mutate(fit=list(lm(formulaC, data=splits)), predictions = list(predict(fit,assessment(splits))), mse = mean((assessment(splits)$body_mass_g-predictions)^2, na.rm=T)) 
+CVC <- CV_outC %>% 
+  ungroup() %>% 
+  summarize(se=sd(mse/sqrt(n())),mse=mean(mse))
+```
+
+```{r}
+table <- data.frame(rbind(CVA,CVB,CVC)) 
+table$Model <- c("A","B","C")
+table <- table[, c("Model", "mse", "se")]
+  names(table) <- c("Model","Mean Squared Error","Standard Error") 
+  knitr::kable(table, caption = "Table 3. 15-fold cross-validation")
+```
+
+```{r}
+coeff_hat <- function(df, formula) {
+  df <- as.data.frame(df)
+  bhh_lm <- lm(formula,
+               data = df)
+  coe <- coef(bhh_lm)
+  estimates <- coe
+  return(estimates)
+}
+
+bootConfidence <- function(df, formula, bootTimes = 200)
+{
+  coeff_hat_res <- coeff_hat(df,formula)
+  coeff_hat_penguins <- as.numeric(coeff_hat_res)
+  coeff_hat_names <- names(coeff_hat_res)
+
+  differences <- df %>%
+    bootstraps(times = bootTimes) %>%
+    rowwise() %>%
+    mutate(diff = list(coeff_hat(splits, formula) - coeff_hat_penguins)) %>%
+    select("diff") %>%
+    unnest() %>%
+    deframe() %>%
+    matrix(nrow = bootTimes, byrow = TRUE)
+  
+  upper <- coeff_hat_penguins - apply(differences, 2, quantile, probs=0.05/2)
+  lower <- coeff_hat_penguins - apply(differences, 2, quantile, probs=1-0.05/2)
+  confidence <- data.frame('Estimated Coefficients' = coeff_hat_penguins, 'Lower Bound' = lower,'Upper Bound' = upper)
+  rownames(confidence) <- coeff_hat_names
+  return(confidence)
+   
+}
+
+```
+
+```{r}
+bootConfA <- bootConfidence(dfA, formulaA)
+bootConfB <- bootConfidence(penguins, formulaB)
+bootConfC <- bootConfidence(penguins, formulaC)
+```
+
+```{r}
+kable(bootConfA[-1,],caption = "Table 4. Bootstrap Confidence Intervals for Model A Coefficients")
+```
+
+

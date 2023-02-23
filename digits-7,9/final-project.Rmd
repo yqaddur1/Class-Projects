@@ -1,0 +1,537 @@
+---
+title: Discriminating Digits 7 & 9
+subtitle: Stat 6560 Final Project
+author: Yousef Qaddura 12-11-2022
+output:
+  pdf_document: default
+  html_document: default
+geometry: margin=0.5cm
+fontsize: 11pt
+---
+
+```{r Setup, include=FALSE} 
+# Suppressing output and setting a random seed
+library(knitr)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo=FALSE, fig.align = 'center', cache.extra = rand_seed)
+set.seed(105134)
+```
+
+```{r Loading Libraries, echo=FALSE}
+# Loading Libraries
+library(leaps)
+library(purrr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(rsample)
+library(MASS)
+library(Rfast)
+```
+
+```{r Reading Data}
+# Reading Data
+data.7 <- read.csv("train.7.txt", header = F)
+data.7 <- as.matrix(data.7)
+data.9 <- read.csv("train.9.txt", header = F)
+data.9 <- as.matrix(data.9)
+```
+
+## Introduction
+We are interested in training a model for distinguishing images of hand-written digits ($7$ & $9$). This is useful for hand-writing recognition systems.
+
+A digit image (resulting from a $16\times 16$ grayscale matrix) is represented by a $256$-dimensional vector of normalized intensity values. There are `r dim(data.7)[[1]]` digit $7$ images and `r dim(data.9)[[1]]` digit $9$ images.
+
+The following are the first five images of each digit in their corresponding data-sets.
+
+```{r Visualizing Images, fig.height = 0.9}
+# The function "digit.image" takes a 256 vector as input and displays the corresponding 16x16 matrix as a gray scale image
+digit.image <- function(x)
+{ 
+  img <- matrix(as.vector(x), nrow = 16, ncol=16) 
+  image(img[,16:1], col=gray((32:0)/32), axes=F, asp = 1)
+  box(col=3)
+}
+
+# visualize the first five "7" and the first five "9" images
+par(mfrow=c(1,5), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:5)
+{ digit.image(data.7[i,]) }
+mtext("Sample of Digit 7 Images", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,5), omi=c(0,0,0.2,0), mar=rep(0.2,4))
+for (i in 1:5)
+{ digit.image(data.9[i,]) }
+mtext("Sample of Digit 9 Images", side = 3, line = 0, outer = TRUE, cex = 1)
+```
+
+We split that data into a training set of $800$ observations ($400$ for each digit) and a test set of $489$ ($245$ $7$'s and $244$ $9$'s).
+
+```{r Data Split}
+data.7.train <- data.7[1:400,]
+data.7.test <- data.7[401:645,]
+
+data.9.train <- data.9[1:400,]
+data.9.test <- data.9[401:644,]
+
+data.train <- rbind(data.7.train, data.9.train)
+label.train <- c(rep(7,400), rep(9,400))
+data.test <- rbind(data.7.test, data.9.test)
+label.test <- c(rep(7,245), rep(9,244))
+```
+
+## Dimensionality Reduction
+
+### Digit 7 Principal Component Analysis
+We begin by carrying out a principal component data analysis on the training data for digit $7$. The scree plot below shows an elbow taking place at the fifth component. As such, we deem adequate to take the first four principal compoenents to explain variations in the data.
+
+```{r PCA7, fig.height=3}
+pca.7.train <- princomp(data.7.train)
+plot(pca.7.train, main="Digit 7 Scree plot")
+```
+
+We embark on understanding the kind of variation each of the first few components capture. The first four principal principal components yield mean-centered eigen-images $E_i$ and score standard deviations $s_i$. For each eigen-image, we march starting from the mean using the formula
+\[\overline X + c_i\cdot E_i\]
+where $\overline X$ is the mean training image and $c_i$ ranges though $11$ equally spaced values on the interval $[-2s_i,2s_i]$ (this includes the endpoints and the value $0$). The resulting $11$ images for each component are shown below:
+
+```{r PCA7 Ranges, fig.height=1}
+numC <- 11
+numSd <- 2
+numComp <- 4
+
+scores.7.train <- pca.7.train$scores[, 1:numComp]
+maxScore.7.train <- apply(scores.7.train, 2, \(x) max(abs(x)))
+sd.7.train <- apply(scores.7.train, 2, \(x) sd(x))
+
+meanImage <- pca.7.train$center
+cRanges <- map(sd.7.train, \(x) seq(from = -numSd*x, to = numSd*x, length.out = numC))
+comps <- pca.7.train$loadings
+strings <- c("1st","2nd","3rd","4th")
+  
+for (j in 1: numComp)
+{
+  par(mfrow=c(1,numC), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s")
+  currentComp <- comps[,j]
+  for (i in 1:numC)
+  { digit.image(meanImage + cRanges[[j]][[i]]*currentComp)
+  }
+  mtext(paste(strings[j], "Component"), side = 3, line = 0, outer = TRUE, cex = 1)
+}
+par(mfrow=c(1,1))
+```
+
+The first principal component describes how wide or thin the seven is. The second describes how obtuse the top edge of the seven is. The third highlights the thickness/thinness of the seven. Lastly, the fourth highlights how rotated the seven is overall.
+
+We now take a look at the score plot for the first two components.
+```{r PCA7 Scores, fig.height=3,fig.width=6}
+par(mfrow=c(1,1),mar=c(4,4,1.8,0))
+plot(scores.7.train[,1:2], pch=16, col=2, main="Digit 7 1st and 2nd Component Scores")
+```
+
+The first component has a longer range of scores. There seems to be a bunch of somewhat stand-outimages with very low score in the second component (nearing $-10$) and a bunch with very high score in the first component (nearing $8$). The three extreme images of each component are shown below
+
+```{r PCA7 Extreme Scores, fig.height=1}
+comp1 <- comps[1,]
+comp1.scores <- scores.7.train[,1]
+comp2 <- comps[2,]
+comp2.scores <- scores.7.train[,2]
+hndx.1 <- order(comp1.scores, decreasing = T)[1:3]
+lndx.1 <- order(comp1.scores, decreasing = F)[1:3]
+hndx.2 <- order(comp2.scores, decreasing = T)[1:3]
+lndx.2 <- order(comp2.scores, decreasing = F)[1:3]
+
+highest.comp.1 <- data.7.train[hndx.1,]
+lowest.comp.1 <- data.7.train[lndx.1,]
+highest.comp.2 <- data.7.train[hndx.2,]
+lowest.comp.2 <- data.7.train[lndx.2,]
+
+par(mfrow=c(1,3), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:3)
+{ digit.image(highest.comp.1[i,]) }
+mtext("Highest 1st Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,3), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:3)
+{ digit.image(lowest.comp.1[i,]) }
+mtext("Lowest 1st Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,3), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:3)
+{ digit.image(highest.comp.2[i,]) }
+mtext("Highest 2nd Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,3), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:3)
+{ digit.image(lowest.comp.2[i,]) }
+mtext("Lowest 2nd Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+par(mfrow=c(1,1))
+
+
+#for (i in 1:3)
+#{ digit.image(meanImage + nth(comp1.scores, i, descending = T)*comp1) }
+#for (i in 1:3)
+#  { digit.image(meanImage + nth(comp2.scores, i, descending = T)*comp2) }
+#par(mfrow=c(1,1))
+
+```
+
+The lower 1st component values seem to capture a thinner seven while the higher ones capture a wider seven. The lower 2nd component values seem to capture an acute tilt in the drawing of the seven or an obtuse top edge as opposed to a horizontal top edge captured by the higher 2nd component values.
+
+### Digit 9 Principal Component Analysis
+We perform a similar analysis as above to the training data of the digit $9$. The scree plot below shows an elbow taking place at the second component, but for the sake of exploration, we deem adequate to take the first four principal compoenents to explain variations in the data.
+
+```{r PCA9, fig.height=3, fig.width=6}
+pca.9.train <- princomp(data.9.train)
+plot(pca.9.train, main="Digit 9 Scree plot")
+```
+
+As before, we use the formula
+\[\overline X + c_i\cdot E_i\]
+where $\overline X$ is the mean training image and $c_i$ ranges though $11$ equally spaced values on the interval $[-2s_i,2s_i]$ (this includes the endpoints and the value $0$). The resulting $11$ images for each component are shown below:
+
+```{r PCA9 Ranges, fig.height=1}
+numC <- 11
+numSd <- 2
+numComp <- 4
+
+scores.9.train <- pca.9.train$scores[, 1:numComp]
+maxScore.9.train <- apply(scores.9.train, 2, \(x) max(abs(x)))
+sd.9.train <- apply(scores.9.train, 2, \(x) sd(x))
+
+meanImage <- pca.9.train$center
+cRanges <- map(sd.9.train, \(x) seq(from = -numSd*x, to = numSd*x, length.out = numC))
+comps <- pca.9.train$loadings
+strings <- c("1st","2nd","3rd","4th")
+  
+for (j in 1: numComp)
+{
+  par(mfrow=c(1,numC), omi=c(0,0,0.4,0), mar=rep(0.2,4),pty="s")
+  currentComp <- comps[,j]
+  for (i in 1:numC)
+  { digit.image(meanImage + cRanges[[j]][[i]]*currentComp)
+  }
+  mtext(paste(strings[j], "Component"), side = 3, line = 1, outer = TRUE, cex = 1.5)
+}
+par(mfrow=c(1,1))
+```
+
+The first component highlights how small the circle of the nine is. The second shows how tilted the oval of the nine is (the oval is more horizontally stretched with higher values and more diagonally stretched with lower values). Next, the third principal component describes how thin/thick the font is. Lastly, the fourth component seems to distinguish between larger nines (higher values) and neater smaller nines (smaller values).
+
+We now take a look at the score plot for the first two components.
+```{r PCA9 Scores, fig.height=3,fig.width=6}
+par(mfrow=c(1,1),mar=c(4,4,1.8,0))
+plot(scores.9.train[,1:2], pch=16, col=2, main="Digit 9 1st and 2nd Component Scores")
+```
+
+The first component has a longer range of scores. There seems to be a bunch of stand-out images with very high scores in the second component (nearing $8$) and a bunch with very low score in the first component (nearing $-10$). The four extreme images from each component are shown below
+
+```{r PCA9 Extreme Scores, fig.height=1}
+extNum <- 4
+
+comp1 <- comps[1,]
+comp1.scores <- scores.9.train[,1]
+comp2 <- comps[2,]
+comp2.scores <- scores.9.train[,2]
+hndx.1 <- order(comp1.scores, decreasing = T)[1:extNum]
+lndx.1 <- order(comp1.scores, decreasing = F)[1:extNum]
+hndx.2 <- order(comp2.scores, decreasing = T)[1:extNum]
+lndx.2 <- order(comp2.scores, decreasing = F)[1:extNum]
+
+highest.comp.1 <- data.9.train[hndx.1,]
+lowest.comp.1 <- data.9.train[lndx.1,]
+highest.comp.2 <- data.9.train[hndx.2,]
+lowest.comp.2 <- data.9.train[lndx.2,]
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(highest.comp.1[i,]) }
+mtext("Highest 1st Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(lowest.comp.1[i,]) }
+mtext("Lowest 1st Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(highest.comp.2[i,]) }
+mtext("Highest 2nd Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(lowest.comp.2[i,]) }
+mtext("Lowest 2nd Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+par(mfrow=c(1,1))
+
+
+#for (i in 1:3)
+#{ digit.image(meanImage + nth(comp1.scores, i, descending = T)*comp1) }
+#for (i in 1:3)
+#  { digit.image(meanImage + nth(comp2.scores, i, descending = T)*comp2) }
+#par(mfrow=c(1,1))
+
+```
+
+Lowest first component scores have nines with very small circles and highest first component scores have nines with largest and more ovally circles. Higher second component scores have nines with horizontally stretched ovals while the lowest scores have more diagonally stretched ovals. One of the lowest scoring nines in the second component looks atypical due to the gap/disconnect in the oval.
+
+### Combined Principal Component Analysis
+
+We lastly a perform an analysis as above to the training data of both digits. The scree plot below shows an elbow taking place at the fourth component, so we deem adequate to take the first four principal compoenents to explain variations in the data.
+
+```{r PCA-ALL,fig.width=6,fig.height=3}
+pca.all.train <- princomp(data.train)
+plot(pca.all.train, main="Both Digits Scree plot")
+```
+
+As before, we use the formula
+\[\overline X + c_i\cdot E_i\]
+where $\overline X$ is the mean training image and $c_i$ ranges though $11$ equally spaced values on the interval $[-2s_i,2s_i]$ (this includes the endpoints and the value $0$). The resulting $11$ images for each component are shown below:
+
+```{r PCA-ALL Ranges, fig.height=1}
+numC <- 11
+numSd <- 2
+numComp <- 4
+
+scores.all.train <- pca.all.train$scores[, 1:numComp]
+maxScore.all.train <- apply(scores.all.train, 2, \(x) max(abs(x)))
+sd.all.train <- apply(scores.all.train, 2, \(x) sd(x))
+
+meanImage <- pca.all.train$center
+cRanges <- map(sd.all.train, \(x) seq(from = -numSd*x, to = numSd*x, length.out = numC))
+comps <- pca.all.train$loadings
+strings <- c("1st","2nd","3rd","4th")
+  
+for (j in 1: numComp)
+{
+  par(mfrow=c(1,numC), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s")
+  currentComp <- comps[,j]
+  for (i in 1:numC)
+  { digit.image(meanImage + cRanges[[j]][[i]]*currentComp)
+  }
+  mtext(paste(strings[j], "Component"), side = 3, line = 0, outer = TRUE, cex = 1)
+}
+par(mfrow=c(1,1))
+```
+
+The first component is higher for wider sevens and lower for circular-holed nines. The second component is higher for thinner top-curved sevens and lower for diagonally-oval nines. The third component is lower for sevens that look like $1$ on top and higher for thicker nines. The fourth component highlights large digits with higher values.
+
+We now take a look at the labeled score plot for the first two components.
+```{r PCA-ALL Scores, fig.height=3,fig.width=6}
+colors <- c("blue","red")
+par(mfrow=c(1,1),mar=c(4,4,1.8,0))
+plot(scores.all.train[,1:2], pch=16, col=colors[factor(label.train)], main="Both Digits 1st and 2nd Component Scores")
+legend("bottomleft", legend = c("Digit 7","Digit 9"), pch = 19, col=colors)
+```
+
+We observe that most $7$ digits have higher first and second component scores than most $9$ digits. Also, the grouped scores seem to be somewhat linearly separated hinting that linear discriminant analysis is adequate. Similar observations hold by looking at the following extreme score pictures.
+
+```{r PCA-ALL Extreme Scores, fig.height=1}
+extNum <- 4
+
+comp1 <- comps[1,]
+comp1.scores <- scores.all.train[,1]
+comp2 <- comps[2,]
+comp2.scores <- scores.all.train[,2]
+hndx.1 <- order(comp1.scores, decreasing = T)[1:extNum]
+lndx.1 <- order(comp1.scores, decreasing = F)[1:extNum]
+hndx.2 <- order(comp2.scores, decreasing = T)[1:extNum]
+lndx.2 <- order(comp2.scores, decreasing = F)[1:extNum]
+
+highest.comp.1 <- data.train[hndx.1,]
+lowest.comp.1 <- data.train[lndx.1,]
+highest.comp.2 <- data.train[hndx.2,]
+lowest.comp.2 <- data.train[lndx.2,]
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(highest.comp.1[i,]) }
+mtext("Highest 1st Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(lowest.comp.1[i,]) }
+mtext("Lowest 1st Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(highest.comp.2[i,]) }
+mtext("Highest 2nd Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+
+par(mfrow=c(1,extNum), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+for (i in 1:extNum)
+{ digit.image(lowest.comp.2[i,]) }
+mtext("Lowest 2nd Component Scores", side = 3, line = 0, outer = TRUE, cex = 1)
+par(mfrow=c(1,1))
+
+
+#for (i in 1:3)
+#{ digit.image(meanImage + nth(comp1.scores, i, descending = T)*comp1) }
+#for (i in 1:3)
+#  { digit.image(meanImage + nth(comp2.scores, i, descending = T)*comp2) }
+#par(mfrow=c(1,1))
+
+```
+
+## Classification
+
+### Fisher's Linear Discriminant Analysis through Pixels
+We seek to train a classification model on the data. Our first approach is to perform Fisher's linear discriminant analysis (LDA) on the combined training data, using all the pixels (seen as variables) with sufficient variation. The following is the image whose pixel intensities are given by their standard deviation in the data
+
+
+```{r SD Intensity, fig.height=1}
+col.sd <- apply(data.train, 2, sd)
+
+par(mfrow=c(1,1), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+digit.image(col.sd)
+mtext("Standard Deviation Intensity Image", side = 3, line = 0, outer = TRUE, cex = 1)
+```
+
+Using the first quantile of $0.1676$, we deem variables with sufficient variation to be precisely the ones with standard deviation above $0.2$. By sub-setting such pixels, we perform LDA on the modified labeled training data. The following is an image of the coefficients of the linear discriminant.
+
+```{r LDA with Pixels, fig.height=1}
+col.ind <- (1:256)[col.sd>0.2]
+lda.79 <- lda(data.train[,col.ind], label.train) # lda(x, grouping)
+
+LD1 <- rep(0,256)
+LD1[col.ind] <- lda.79$scaling
+# digit.image(LD1)
+par(mfrow=c(1,1), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+digit.image(LD1)
+mtext("Linear Discriminant Coefficient Image", side = 3, line = 0, outer = TRUE, cex = 1)
+```
+
+The error rates for the training data, testing data and leave-one-out cross-validation are respectively given in the table below.
+
+```{r Error Rate Pixels}
+pred.pixel.true <- predict(lda.79)
+pred.pixel.test <- predict(lda.79, newdata = data.test[,col.ind])
+apparent.pixel <- mean(label.train != pred.pixel.true$class)
+test.error.pixel <- mean(label.test != pred.pixel.test$class)
+
+lda.79.cv <- lda(data.train[,col.ind], label.train, CV = T)
+cv.error.pixel <- mean(label.train != lda.79.cv$class)
+
+errors.pixel <- data.frame('Apparent' = apparent.pixel,
+           'Test' = test.error.pixel,
+           'Leave-one-out' = cv.error.pixel)
+rownames(errors.pixel) <- c('Error Rate')
+knitr::kable(errors.pixel, caption  ="Error Rates for LDA with Pixels")
+
+```
+
+The model performs very well in terms of the apparent error rate hitting above $\%99$ accuracy. It hits almost $\%96$ accuracy on the testing data and around $\% 97.25$ accuracy on the leave-one-out cross-validation method. All in all, we observe that the model has performed well.
+
+### Fisher's Linear Discriminant Analysis through Principal Components
+Instead of looking at pixels as variables for discrimination as above, we simplify matters and focus only on the first two principal components as variables for LDA. We have already seen in the scores plot above that there a chance LDA would work relatively in this simpler setting. The resulting linear discriminant is shown in the plot below.
+
+```{r LDA with Scores, fig.height=4,fig.width=7}
+train.scores <- scores.all.train[,1:2]
+test.scores <- predict(pca.all.train, newdata = data.test)[,1:2]
+
+lda.pca <- lda(train.scores, label.train)
+a.hat <- lda.pca$scaling
+slope <- a.hat[[2]]/a.hat[[1]]
+
+
+par(mfrow=c(1,1),mar=c(4,4,1.8,0))
+plot(scores.all.train[,1:2], pch=16, col=colors[factor(label.train)], main="Component Scores with LDA Line", asp=1, cex = 0.7)
+abline(a=0,b=slope,lwd = 3)
+legend("bottomleft", legend = c("Digit 7","Digit 9"), pch = 19, col=colors)
+
+```
+Due to the red dots overlapping in the blue region, we should expect LDA to perform worse here. The following table shows the error rates for the model:
+
+```{r Error Rate Scores}
+pred.pca.true <- predict(lda.pca)
+pred.pca.test <- predict(lda.pca, newdata = test.scores)
+apparent.pca <- mean(label.train != pred.pca.true$class)
+test.error.pca <- mean(label.test != pred.pca.test$class)
+
+lda.pca.cv <- lda(train.scores, label.train, CV = T)
+cv.error.pca <- mean(label.train != lda.pca.cv$class)
+
+errors.pca <- data.frame('Apparent' = apparent.pca,
+           'Test' = test.error.pca,
+           'Leave-one-out' = cv.error.pca)
+rownames(errors.pca) <- c('Error Rate')
+knitr::kable(errors.pca, caption  ="Error Rates for LDA with Principal Components")
+```
+
+All error rates are not ideal with almost all accuracies being around $\% 84$. Indeed, this is expected to be worse than before since we have reduced the number of variables from `r sum(col.sd>0.2)` to `r 2`!!! On the other hand, this shows the power of PCA in choosing two variables that matter the most in contrasting the data.
+
+We now consider the effect of including more principal components in the LDA analysis. The plot below shows the three error rates plotted against how many components are considered in the analysis:
+
+```{r More Components, fig.height=3, fig.width=6}
+errorData <- function(num.components){
+  train.scores<-pca.all.train$scores[,1:num.components[[1]]]
+  #print(dim(train.scores))
+  test.scores <- predict(pca.all.train, newdata = data.test)[,1:num.components]
+  
+  lda.pca <- lda(train.scores, label.train)
+  
+  pred.pca.true <- predict(lda.pca)
+  pred.pca.test <- predict(lda.pca, newdata = test.scores)
+  apparent.pca <- mean(label.train != pred.pca.true$class)
+  test.error.pca <- mean(label.test != pred.pca.test$class)
+  
+  lda.pca.cv <- lda(train.scores, label.train, CV = T)
+  cv.error.pca <- mean(label.train != lda.pca.cv$class)
+  
+  errors.pca <- data.frame('Apparent' = apparent.pca,
+         'Test' = test.error.pca,
+         'Leave-one-out' = cv.error.pca)
+  return(errors.pca)
+}
+
+drawErrors <- function(maxComp){
+  errorFrame <- map(2:maxComp, errorData)
+  errorFrame <- bind_rows(errorFrame, .id = "Components")
+  errorFrame$Components <- as.numeric(errorFrame$Components) + 1
+  
+  ggplot(errorFrame, aes(x = Components)) +
+  geom_line(aes(y = Apparent, color = "Apparent")) +
+  geom_line(aes(y = Test, color = "Test")) +
+  geom_line(aes(y = Leave.one.out, color = "Leave-one-out"))+
+  scale_color_discrete(name="")+
+  labs(title="LDA Error Rates",
+        x ="Number of Components", y = "Error Rate")+
+  theme(plot.title = element_text(hjust = 0.5))
+  
+
+}
+
+drawErrors(70)
+
+```
+
+We observe that the testing error stabilizes around $0.04$, the leave-one-out error stabilizes around $0.03$ and the apparent error slowly decreases and goes below $0.02$ with $70$ principal components considered. Eventually, including too many components does not change the error rates by much. However, the plot does show that taking only two components may not be good enough.
+
+The plot below shows the scree taking place at five components. Hence, if LDA is to be performed, we recommend performing it on the first five PCA components to achieve decent error rates and keep the model simple.
+
+```{r Scree Errors, fig.height=3,fig.width=6}
+drawErrors(6)
+```
+
+## Discussion
+
+We have remarked how Principal Component Analysis is a powerful tool in picking out the most distinguishing features in the data. In our context of two-way classification, this was apparent in all three PCA analyses conducted on each of digit $7$ training data, digit $9$ training data and both digits' training data respectively.
+
+We have also remarked that PCA is powerful in reducing model complexity. In our context, the performance of LDA when a sizable portion of pixels (`r sum(col.sd > 0.2)`) are considered as variables is very comparable to the performance of LDA when restricted to only five principal components (both reaching accuracies above $\% 96$ in all three measures). This is a huge reduction in dimensionality. In fact, even when only two components were considered, LDA performed relatively well reaching accuracies of around $\% 84$ in all three measures!
+
+Now, let us address the limitations in our analysis. First, we take a look at the training data that LDA with sub-setted pixel variables failed to classify:
+
+```{r, fig.height=1}
+
+pixel.fail.train <- data.train[label.train != pred.pixel.true$class,]
+
+par(mfrow=c(1,7), omi=c(0,0,0.2,0), mar=rep(0.2,4),pty="s") 
+suppress <- map(1:dim(pixel.fail.train)[[1]], \(x) digit.image(pixel.fail.train[x,]))
+mtext("LDA with Pixels Training Failure", side = 3, line = 0, outer = TRUE, cex = 1)
+par(mfrow=c(1,1))
+```
+Three of them are nines with too thin of hole that it could look like a seven. Two of the failed sevens had an extra line through the middle. The other nine had a gap in its the drawing. This shows that our model does not perform well in extreme cases of thin nines and extreme cases of sevens with a line through.
+
+One solution to improve on our model is to use the idea of Boosting. This is a sequence of models such that the data of each is generated as a bootstrap which over-samples data points which failed to be classified in the previous model. By doing so, we might be able to improve performance on all of our models above.
+
+Another limitation is the fact that the problem we are considering is a comparison between seven and nine, two digits that have a different topology and rarely look similar. A harder situation would be distinguing between the digits $1$ and $7$ or even all the digits $1$ through $9$ combined. A better solution that is usually taken in such kind of circumstance are Convolutional Neural Networks. This is outside the scope of this report and we leave it for future work.
+
